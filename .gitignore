@@ -24,6 +24,7 @@ out/
 *.swp
 *.swo
 .DS_Store
+.editorconfig
 
 # Operating system files
 Thumbs.db

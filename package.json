@@ -1,4 +1,23 @@
 {
+  "name": "@sequinstream/sequin-js",
+  "version": "0.1.0",
+  "description": "A lightweight JavaScript SDK for sending, receiving, and acknowledging messages in Sequin streams",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sequinstream/sequin-js"
+  },
+  "keywords": [
+    "sequin",
+    "stream",
+    "messaging"
+  ],
+  "author": "Sequin",
+  "license": "MIT",
   "devDependencies": {
     "@types/axios": "^0.14.0",
     "@types/jest": "^29.5.12",
@@ -16,9 +35,7 @@
     "prepare": "npm run compile",
     "pretest": "npm run compile",
     "posttest": "npm run lint",
-    "test": "jest"
-  },
-  "dependencies": {
-    "axios": "^1.7.2"
+    "test": "jest",
+    "build": "tsc -p tsconfig.json"
   }
 }

@@ -1,149 +1,139 @@
-import axios from 'axios';
-
-interface SequinConfig {
+export interface SequinConfig {
   baseUrl?: string;
 }
 
-interface Message {
-  subject: string;
-  data: any;
-  ack_id?: string;
+export interface Message {
+  key: string;
+  data: string;
 }
 
-class Stream {
-  constructor(private config: SequinConfig, private streamName: string) {}
-
-  async sendMessage(message: Message): Promise<void> {
-    await axios.post(
-      `${this.config.baseUrl}/api/streams/${this.streamName}/messages`,
-      { messages: [{ data: message.data, subject: message.subject }] }
-    );
-  }
-
-  async createConsumer(consumerName: string, options: {
-    filterSubjectPattern: string;
-    ackWaitMs?: number;
-    maxAckPending?: number;
-    maxDeliver?: number;
-    maxWaiting?: number;
-    kind?: 'pull' | 'push';
-    status?: 'active' | 'disabled';
-    httpEndpointId?: string;
-  }): Promise<Consumer> {
-    const response = await axios.post(
-      `${this.config.baseUrl}/api/streams/${this.streamName}/consumers`,
-      {
-        name: consumerName,
-        filter_subject_pattern: options.filterSubjectPattern,
-        ack_wait_ms: options.ackWaitMs,
-        max_ack_pending: options.maxAckPending,
-        max_deliver: options.maxDeliver,
-        max_waiting: options.maxWaiting,
-        kind: options.kind,
-        status: options.status,
-        http_endpoint_id: options.httpEndpointId
-      }
-    );
-    return new Consumer(this.config, this.streamName, consumerName, options);
-  }
-
-  getConsumer(consumerName: string): Consumer {
-    return new Consumer(this.config, this.streamName, consumerName, {
-      filterSubjectPattern: '*' // Default pattern, adjust as needed
-    });
-  }
+export interface StreamOptions {
+  one_message_per_key?: boolean;
+  process_unmodified?: boolean;
+  max_storage_gb?: number;
+  retain_up_to?: number;
+  retain_at_least?: number;
 }
 
-class Consumer {
-  constructor(
-    private config: SequinConfig,
-    private streamName: string,
-    private consumerName: string,
-    private options: {
-      ackWaitMs?: number;
-      maxAckPending?: number;
-      maxDeliver?: number;
-      maxWaiting?: number;
-      filterSubjectPattern: string;
-      kind?: 'pull' | 'push';
-      status?: 'active' | 'disabled';
-      httpEndpointId?: string;
-    }
-  ) {}
-
-  async receiveMessages(batchSize: number = 1): Promise<{ data: Array<{ message: Message, ack_id: string }> }> {
-    const response = await axios.get(
-      `${this.config.baseUrl}/api/streams/${this.streamName}/consumers/${this.consumerName}/receive`,
-      {
-        params: { batch_size: batchSize },
-        headers: { 'Accept': 'application/json' }
-      }
-    );
-    return response.data;
-  }
-
-  async ackMessage(ackId: string): Promise<void> {
-    await axios.post(
-      `${this.config.baseUrl}/api/streams/${this.streamName}/consumers/${this.consumerName}/ack`,
-      { ack_ids: [ackId] }
-    );
-  }
-
-  async nackMessage(ackId: string): Promise<void> {
-    await axios.post(
-      `${this.config.baseUrl}/api/streams/${this.streamName}/consumers/${this.consumerName}/nack`,
-      { ack_ids: [ackId] }
-    );
-  }
-
-  async delete(): Promise<void> {
-    await axios.delete(
-      `${this.config.baseUrl}/api/streams/${this.streamName}/consumers/${this.consumerName}`
-    );
-  }
-
-  async onMessage(callback: (message: Message & { ack: () => Promise<void>; nack: () => Promise<void> }) => Promise<void>) {
-    while (true) {
-      try {
-        const response = await this.receiveMessages();
-        if (response.data && Array.isArray(response.data)) {
-          for (const item of response.data) {
-            if (item.message && item.ack_id) {
-              await callback({
-                ...item.message,
-                ack: () => this.ackMessage(item.ack_id),
-                nack: () => this.nackMessage(item.ack_id),
-              });
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error in onMessage:', error);
-        // Optionally add a delay before retrying
-        // await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    }
-  }
+export interface ConsumerOptions {
+  ack_wait_ms?: number;
+  max_ack_pending?: number;
+  max_deliver?: number;
 }
 
-export class Sequin {
+export class Client {
   private config: SequinConfig;
 
-  constructor(config: SequinConfig = {}) {
+  private constructor(config: SequinConfig = {}) {
     this.config = {
       baseUrl: config.baseUrl || 'http://localhost:7376',
     };
   }
 
-  async createStream(streamName: string): Promise<Stream> {
-    await axios.post(
-      `${this.config.baseUrl}/api/streams`,
-      { name: streamName }
-    );
-    return new Stream(this.config, streamName);
+  static init(config: SequinConfig = {}): Client {
+    return new Client(config);
   }
 
-  getStream(streamName: string): Stream {
-    return new Stream(this.config, streamName);
+  private async request(endpoint: string, method: string, body?: any): Promise<any> {
+    try {
+      const response = await fetch(`${this.config.baseUrl}${endpoint}`, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        return { res: null, error: { status: response.status, summary: errorData.summary } };
+      } else if (response.status === 204) {
+        return { res: { success: true }, error: null };
+      }
+
+      const data = await response.json();
+      return { res: data.data || data, error: null };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'fetch failed') {
+        return {
+          res: null,
+          error: {
+            status: 500,
+            summary: `We can't reach Sequin on ${this.config.baseUrl}. Double check that Sequin is running and confirm your JS client is configured properly`
+          }
+        };
+      }
+      return { res: null, error: { status: 500, summary: (error as Error).message } };
+    }
+  }
+
+  async sendMessage(stream: string, key: string, data: any): Promise<any> {
+    return this.sendMessages(stream, [{ key, data }]);
+  }
+
+  async sendMessages(stream: string, messages: Message[]): Promise<any> {
+    return this.request(`/api/streams/${stream}/messages`, 'POST', { messages });
+  }
+
+  async receiveMessage(stream: string, consumer: string): Promise<any> {
+    const result = await this.receiveMessages(stream, consumer, { batch_size: 1 });
+    if (result.error) return result;
+    return result.res && result.res.length > 0
+      ? { res: result.res[0], error: null }
+      : { res: null, error: null };
+  }
+
+  async receiveMessages(stream: string, consumer: string, options: { batch_size?: number } = { batch_size: 10 }): Promise<any> {
+    const batch_size = options.batch_size || 10;
+    return this.request(`/api/streams/${stream}/consumers/${consumer}/receive?batch_size=${batch_size}`, 'GET');
+  }
+
+  async ackMessages(stream: string, consumer: string, ack_ids: string[]): Promise<any> {
+    return await this.request(`/api/streams/${stream}/consumers/${consumer}/ack`, 'POST', { ack_ids: ack_ids });
+  }
+
+  async ackMessage(stream: string, consumer: string, ack_id: string): Promise<any> {
+    return this.ackMessages(stream, consumer, [ack_id]);
+  }
+
+  async nackMessages(stream: string, consumer: string, ack_ids: string[]): Promise<any> {
+    return await this.request(`/api/streams/${stream}/consumers/${consumer}/nack`, 'POST', { ack_ids: ack_ids });
+  }
+
+  async nackMessage(stream: string, consumer: string, ack_id: string): Promise<any> {
+    return this.nackMessages(stream, consumer, [ack_id]);
+  }
+
+  async createStream(stream_name: string, options: StreamOptions = {}): Promise<any> {
+    return this.request('/api/streams', 'POST', { name: stream_name, ...options });
+  }
+
+  async deleteStream(stream_id_or_name: string): Promise<any> {
+    const result = await this.request(`/api/streams/${stream_id_or_name}`, 'DELETE');
+    if (result.error) return result;
+    return {
+      res: result.res,
+      error: null
+    };
+  }
+
+  async createConsumer(stream_id_or_name: string, consumer_name: string, consumer_filter: string, options: ConsumerOptions = {}): Promise<any> {
+    return this.request(`/api/streams/${stream_id_or_name}/consumers`, 'POST', {
+      name: consumer_name,
+      filter_key_pattern: consumer_filter,
+      kind: 'pull',
+      ...options
+    });
+  }
+
+  async deleteConsumer(stream_id_or_name: string, consumer_id_or_name: string): Promise<any> {
+    const result = await this.request(`/api/streams/${stream_id_or_name}/consumers/${consumer_id_or_name}`, 'DELETE');
+    if (result.error) return result;
+    return {
+      res: result.res,
+      error: null
+    };
   }
 }
